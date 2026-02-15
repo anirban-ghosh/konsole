@@ -252,6 +252,9 @@ set(konsoleprivate_SRCS ${windowadaptors_SRCS}
                         session/SessionManager.cpp
                         session/SessionTask.cpp
 
+                        tmuxcontrol/TmuxControlCommandQueue.cpp
+                        tmuxcontrol/TmuxControlParser.cpp
+
                         widgets/TerminalDisplayAccessible.cpp
                         widgets/TerminalHeaderBar.cpp
                         widgets/ViewContainer.cpp
@@ -435,4 +438,3 @@ if(COVERAGE_GENERATE_HTML)
     COMMAND ${GENHTML} --ignore-errors source --demangle-cpp -o coverage coverage.info
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()
-

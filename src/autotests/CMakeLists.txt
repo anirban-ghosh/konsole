@@ -36,6 +36,7 @@ ecm_add_tests(
     ProfileTest.cpp
     ScreenTest.cpp
     ShellCommandTest.cpp
+    TmuxControlTest.cpp
     TerminalCharacterDecoderTest.cpp
     Vt102EmulationTest.cpp
     LINK_LIBRARIES ${KONSOLE_TEST_LIBS}
