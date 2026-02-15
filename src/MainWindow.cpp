@@ -577,8 +577,11 @@ void MainWindow::applyMainWindowSettings(const KConfigGroup &config)
 
     // Override the toolbar state from the config file
     if (_windowArgsShowToolBars.has_value()) {
-        for (const auto &name : toolBarNames()) {
-            setToolBarVisible(name, _windowArgsShowToolBars.value());
+        const auto toolbars = findChildren<KToolBar *>();
+        for (KToolBar *toolbar : toolbars) {
+            if (toolbar != nullptr) {
+                toolbar->setVisible(_windowArgsShowToolBars.value());
+            }
         }
     }
 
