@@ -284,13 +284,13 @@ void ViewManager::setupActions()
     _multiSplitterOnlyActions << action;
 
     action = new QAction(i18nc("@action Shortcut entry", "Focus Next Terminal"), this);
-    collection->setDefaultShortcut(action, Qt::CTRL | Qt::Key_F11);
+    collection->setDefaultShortcut(action, QKeySequence(Qt::CTRL | Qt::Key_F11));
     connect(action, &QAction::triggered, this, &ViewManager::focusNext);
     collection->addAction(QStringLiteral("focus-view-next"), action);
     _multiSplitterOnlyActions << action;
 
     action = new QAction(i18nc("@action Shortcut entry", "Focus Previous Terminal"), this);
-    collection->setDefaultShortcut(action, Qt::CTRL | Qt::SHIFT | Qt::Key_F11);
+    collection->setDefaultShortcut(action, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F11));
     connect(action, &QAction::triggered, this, &ViewManager::focusPrev);
     collection->addAction(QStringLiteral("focus-view-prev"), action);
     _multiSplitterOnlyActions << action;
