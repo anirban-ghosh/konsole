@@ -12,6 +12,7 @@
 #include <QHash>
 #include <QObject>
 #include <QPointer>
+#include <memory>
 
 #include "containers/ContainerInfo.h"
 #include "konsoleprivate_export.h"
@@ -31,6 +32,7 @@ class TabbedViewContainer;
 class TerminalDisplay;
 class ViewProperties;
 class ViewSplitter;
+class TmuxControlManager;
 
 /**
  * Manages the terminal display widgets in a Konsole window or part.
@@ -540,6 +542,7 @@ private:
     QList<QAction *> _multiSplitterOnlyActions;
 
     QList<QAction *> contextMenuAdditionalActions;
+    std::unique_ptr<TmuxControlManager> _tmuxControlManager;
 
     friend class ViewManagerTest;
 };

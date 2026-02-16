@@ -640,6 +640,9 @@ public Q_SLOTS:
      */
     bool isInContainer() const;
     bool isTmuxControlModeActive() const;
+    QList<TmuxControlSessionState> tmuxControlSessions() const;
+    QList<TmuxControlWindowState> tmuxControlWindows() const;
+    QList<TmuxControlPaneState> tmuxControlPanes() const;
 
     /** Sets the text codec used by this sessions terminal emulation.
      * Overloaded to accept a QByteArray for convenience since DBus
@@ -915,6 +918,7 @@ Q_SIGNALS:
      */
     void hostnameChanged(const QString &hostname);
     void tmuxControlModeChanged(bool enabled);
+    void tmuxControlStateChanged();
 
 private Q_SLOTS:
     void done(int, QProcess::ExitStatus);

@@ -46,6 +46,7 @@
 #include "session/Session.h"
 #include "session/SessionController.h"
 #include "session/SessionManager.h"
+#include "tmuxcontrol/TmuxControlManager.h"
 
 #include "terminalDisplay/TerminalDisplay.h"
 #include "widgets/ViewContainer.h"
@@ -68,6 +69,7 @@ ViewManager::ViewManager(QObject *parent, KActionCollection *collection)
     , _managerId(0)
     , _terminalDisplayHistoryIndex(-1)
     , contextMenuAdditionalActions({})
+    , _tmuxControlManager(std::make_unique<TmuxControlManager>(this))
 {
 #if HAVE_DBUS
     qDBusRegisterMetaType<QList<double>>();
@@ -655,6 +657,7 @@ Session *ViewManager::createSession(const Profile::Ptr &profile, const QString &
 {
     Session *session = SessionManager::instance()->createSession(profile);
     Q_ASSERT(session);
+    _tmuxControlManager->watchSession(session);
     if (!directory.isEmpty()) {
         session->setInitialWorkingDirectory(directory);
     }

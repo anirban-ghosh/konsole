@@ -1094,6 +1094,21 @@ bool Session::isTmuxControlModeActive() const
     return _tmuxControlModeActive;
 }
 
+QList<TmuxControlSessionState> Session::tmuxControlSessions() const
+{
+    return _tmuxControlStateModel.sessions();
+}
+
+QList<TmuxControlWindowState> Session::tmuxControlWindows() const
+{
+    return _tmuxControlStateModel.windows();
+}
+
+QList<TmuxControlPaneState> Session::tmuxControlPanes() const
+{
+    return _tmuxControlStateModel.panes();
+}
+
 // Only D-Bus calls this function (via SendText or runCommand)
 void Session::sendText(const QString &text) const
 {
@@ -1874,6 +1889,7 @@ bool Session::isTmuxControlInvocation(const QByteArray &commandLine)
 void Session::handleTmuxControlEvents(const QList<TmuxControlEvent> &events)
 {
     bool sawControlProtocolEvent = false;
+    bool stateChanged = false;
     for (const TmuxControlEvent &event : events) {
         switch (event.type) {
         case TmuxControlEventType::CommandBegin:
@@ -1915,6 +1931,7 @@ void Session::handleTmuxControlEvents(const QList<TmuxControlEvent> &events)
 
         if (event.type == TmuxControlEventType::Notification) {
             _tmuxControlStateModel.applyNotification(event.notificationName, event.arguments);
+            stateChanged = true;
             continue;
         }
 
@@ -1933,11 +1950,16 @@ void Session::handleTmuxControlEvents(const QList<TmuxControlEvent> &events)
             const quint64 commandNumber = event.envelope.commandNumber;
             const bool success = event.type == TmuxControlEventType::CommandEnd;
             _tmuxControlStateModel.finalizeSnapshot(kind, success);
+            stateChanged = true;
             _tmuxCommandKinds.remove(commandNumber);
             if (_tmuxControlCommandQueue.markReplyReceived(commandNumber)) {
                 sendNextTmuxControlCommand();
             }
         }
+    }
+
+    if (stateChanged) {
+        Q_EMIT tmuxControlStateChanged();
     }
 }
 

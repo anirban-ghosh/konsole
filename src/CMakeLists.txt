@@ -253,6 +253,7 @@ set(konsoleprivate_SRCS ${windowadaptors_SRCS}
                         session/SessionTask.cpp
 
                         tmuxcontrol/TmuxControlCommandQueue.cpp
+                        tmuxcontrol/TmuxControlManager.cpp
                         tmuxcontrol/TmuxControlParser.cpp
                         tmuxcontrol/TmuxControlStateModel.cpp
 
