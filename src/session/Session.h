@@ -976,6 +976,8 @@ private:
     void handleTmuxControlEvents(const QList<TmuxControlEvent> &events);
     void handleTmuxOutputNotification(const TmuxControlEvent &event);
     void sendNextTmuxControlCommand();
+    bool forwardInputToTmuxControl(const QByteArray &data);
+    static QByteArray tmuxSingleQuote(const QByteArray &value);
     void processPotentialTmuxControlRequest(const QByteArray &outgoingData);
     static bool isTmuxControlInvocation(const QByteArray &commandLine);
     static QByteArray decodeTmuxEscapedBytes(const QByteArray &escaped);

@@ -1830,6 +1830,11 @@ void Session::onSendDataFromEmulation(const QByteArray &data)
         return;
     }
 
+    if (_tmuxControlModeActive) {
+        forwardInputToTmuxControl(data);
+        return;
+    }
+
     processPotentialTmuxControlRequest(data);
     _shellProcess->sendData(data);
 }
@@ -1946,6 +1951,73 @@ QByteArray Session::decodeTmuxEscapedBytes(const QByteArray &escaped)
     }
 
     return decoded;
+}
+
+QByteArray Session::tmuxSingleQuote(const QByteArray &value)
+{
+    QByteArray quoted;
+    quoted.reserve(value.size() + 2);
+    quoted.append('\'');
+    for (const char c : value) {
+        if (c == '\'') {
+            quoted.append("'\\''");
+        } else {
+            quoted.append(c);
+        }
+    }
+    quoted.append('\'');
+    return quoted;
+}
+
+bool Session::forwardInputToTmuxControl(const QByteArray &data)
+{
+    if (!_tmuxControlModeActive || data.isEmpty()) {
+        return false;
+    }
+
+    QByteArray literalChunk;
+    auto flushLiteralChunk = [this, &literalChunk]() {
+        if (literalChunk.isEmpty()) {
+            return;
+        }
+        enqueueTmuxControlCommand(QByteArrayLiteral("send-keys -l -- ") + tmuxSingleQuote(literalChunk));
+        literalChunk.clear();
+    };
+
+    for (const unsigned char byte : data) {
+        switch (byte) {
+        case '\n':
+        case '\r':
+            flushLiteralChunk();
+            enqueueTmuxControlCommand(QByteArrayLiteral("send-keys Enter"));
+            break;
+        case '\t':
+            flushLiteralChunk();
+            enqueueTmuxControlCommand(QByteArrayLiteral("send-keys Tab"));
+            break;
+        case '\b':
+        case 0x7F:
+            flushLiteralChunk();
+            enqueueTmuxControlCommand(QByteArrayLiteral("send-keys BSpace"));
+            break;
+        case 0x1B:
+            flushLiteralChunk();
+            enqueueTmuxControlCommand(QByteArrayLiteral("send-keys Escape"));
+            break;
+        default:
+            if (byte >= 0x20 && byte <= 0x7E) {
+                literalChunk.append(static_cast<char>(byte));
+            } else {
+                flushLiteralChunk();
+                enqueueTmuxControlCommand(QByteArrayLiteral("send-keys -H ")
+                                              + QByteArray::number(byte, 16).rightJustified(2, '0'));
+            }
+            break;
+        }
+    }
+
+    flushLiteralChunk();
+    return true;
 }
 
 void Session::handleTmuxOutputNotification(const TmuxControlEvent &event)
