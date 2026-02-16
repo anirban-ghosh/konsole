@@ -13,6 +13,7 @@
 // Qt
 #include <QFile>
 #include <QFileDialog>
+#include <QMenu>
 #include <QStringList>
 #include <QTabBar>
 #include <QVariant>
