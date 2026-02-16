@@ -108,10 +108,12 @@ ViewManager::ViewManager(QObject *parent, KActionCollection *collection)
             _tmuxKnownWindowsBySessionId.remove(sessionId);
         }
         rebuildTmuxWindowPicker();
+        rebuildTmuxSessionPicker();
     });
     connect(_tmuxControlManager.get(), &TmuxControlManager::sessionSnapshotChanged, this, [this](int sessionId) {
         synchronizeTmuxUiForSession(sessionId);
         rebuildTmuxWindowPicker();
+        rebuildTmuxSessionPicker();
     });
 
 #if HAVE_DBUS
@@ -243,6 +245,12 @@ void ViewManager::setupActions()
     connect(tmuxWindowPicker->menu(), &QMenu::aboutToShow, this, &ViewManager::rebuildTmuxWindowPicker);
     _tmuxWindowPickerAction = collection->addAction(QStringLiteral("tmux-control-window-picker"), tmuxWindowPicker);
     _tmuxWindowPickerAction->setEnabled(false);
+
+    auto *tmuxSessionPicker = new KActionMenu(i18nc("@action:inmenu", "tmux Sessions"), collection);
+    tmuxSessionPicker->setIcon(QIcon::fromTheme(QStringLiteral("system-users")));
+    connect(tmuxSessionPicker->menu(), &QMenu::aboutToShow, this, &ViewManager::rebuildTmuxSessionPicker);
+    _tmuxSessionPickerAction = collection->addAction(QStringLiteral("tmux-control-session-picker"), tmuxSessionPicker);
+    _tmuxSessionPickerAction->setEnabled(false);
 
     action = new QAction(this);
     action->setText(i18nc("@action:inmenu", "Expand View"));
@@ -822,6 +830,12 @@ void ViewManager::ensureTmuxPanesForWindow(Session *session, const TmuxControlWi
     _viewContainer->setCurrentIndex(targetTabIndex);
 
     QList<TerminalDisplay *> displays = tmuxDisplaysForWindow(targetSplitter, session->sessionId(), window.id);
+    while (displays.size() > panes.size()) {
+        TerminalDisplay *removed = displays.takeLast();
+        forgetTerminal(removed);
+        removed->deleteLater();
+    }
+
     while (displays.size() < panes.size()) {
         if (!displays.isEmpty()) {
             displays.first()->setFocus(Qt::OtherFocusReason);
@@ -846,9 +860,41 @@ void ViewManager::ensureTmuxPanesForWindow(Session *session, const TmuxControlWi
     }
 }
 
+void ViewManager::pruneTmuxUiForSession(int sessionId, const QSet<QByteArray> &knownWindows)
+{
+    if (_viewContainer.isNull()) {
+        return;
+    }
+
+    for (int i = _viewContainer->count() - 1; i >= 0; --i) {
+        auto *splitter = _viewContainer->viewSplitterAt(i);
+        if (splitter == nullptr) {
+            continue;
+        }
+
+        const QList<TerminalDisplay *> terminals = splitter->findChildren<TerminalDisplay *>();
+        QList<TerminalDisplay *> toRemove;
+        for (TerminalDisplay *terminal : terminals) {
+            if (!terminal->property(kTmuxManagedProperty).toBool() || terminal->property(kTmuxSessionIdProperty).toInt() != sessionId) {
+                continue;
+            }
+
+            const QByteArray windowId = terminalTmuxWindowId(terminal);
+            if (windowId.isEmpty() || !knownWindows.contains(windowId)) {
+                toRemove.append(terminal);
+            }
+        }
+
+        for (TerminalDisplay *terminal : toRemove) {
+            forgetTerminal(terminal);
+            terminal->deleteLater();
+        }
+    }
+}
+
 void ViewManager::synchronizeTmuxUiForSession(int sessionId)
 {
-    if (!_tmuxModeBySessionId.value(sessionId, false)) {
+    if (_tmuxUiSyncInProgress || !_tmuxModeBySessionId.value(sessionId, false)) {
         return;
     }
 
@@ -857,8 +903,10 @@ void ViewManager::synchronizeTmuxUiForSession(int sessionId)
         return;
     }
 
+    _tmuxUiSyncInProgress = true;
     const QList<TmuxControlWindowState> windows = sortedTmuxWindowsForSession(sessionId);
     if (windows.isEmpty()) {
+        _tmuxUiSyncInProgress = false;
         return;
     }
 
@@ -868,14 +916,16 @@ void ViewManager::synchronizeTmuxUiForSession(int sessionId)
         ensureTmuxTabForWindow(session, window);
         ensureTmuxPanesForWindow(session, window);
     }
+
+    pruneTmuxUiForSession(sessionId, knownWindows);
     _tmuxKnownWindowsBySessionId.insert(sessionId, knownWindows);
+    _tmuxUiSyncInProgress = false;
 }
 
-void ViewManager::selectTmuxWindow(const QByteArray &windowId)
+void ViewManager::selectTmuxWindowInControlSession(int controlSessionId, const QByteArray &windowId)
 {
-    const int sessionId = tmuxSessionIdForUi();
-    Session *session = tmuxSessionById(sessionId);
-    if (session == nullptr || windowId.isEmpty()) {
+    Session *session = tmuxSessionById(controlSessionId);
+    if (session == nullptr || windowId.isEmpty() || !_tmuxModeBySessionId.value(controlSessionId, false)) {
         return;
     }
 
@@ -883,8 +933,32 @@ void ViewManager::selectTmuxWindow(const QByteArray &windowId)
 
     for (int i = 0; i < _viewContainer->count(); ++i) {
         auto *splitter = _viewContainer->viewSplitterAt(i);
-        if (!tmuxDisplaysForWindow(splitter, sessionId, windowId).isEmpty()) {
+        if (!tmuxDisplaysForWindow(splitter, controlSessionId, windowId).isEmpty()) {
             _viewContainer->setCurrentIndex(i);
+            break;
+        }
+    }
+}
+
+void ViewManager::selectTmuxWindow(const QByteArray &windowId)
+{
+    const int sessionId = tmuxSessionIdForUi();
+    selectTmuxWindowInControlSession(sessionId, windowId);
+}
+
+void ViewManager::selectTmuxSession(int controlSessionId, const QByteArray &tmuxSessionId)
+{
+    Session *session = tmuxSessionById(controlSessionId);
+    if (session == nullptr || tmuxSessionId.isEmpty() || !_tmuxModeBySessionId.value(controlSessionId, false)) {
+        return;
+    }
+
+    session->enqueueTmuxControlCommand(QByteArrayLiteral("switch-client -t ") + tmuxSessionId);
+
+    const QList<TmuxControlWindowState> windows = sortedTmuxWindowsForSession(controlSessionId);
+    for (const TmuxControlWindowState &window : windows) {
+        if (window.sessionId == tmuxSessionId) {
+            selectTmuxWindowInControlSession(controlSessionId, window.id);
             break;
         }
     }
@@ -921,14 +995,53 @@ void ViewManager::rebuildTmuxWindowPicker()
     _tmuxWindowPickerAction->setEnabled(!windows.isEmpty());
 }
 
+void ViewManager::rebuildTmuxSessionPicker()
+{
+    if (_tmuxSessionPickerAction == nullptr) {
+        return;
+    }
+
+    auto *sessionMenu = qobject_cast<KActionMenu *>(_tmuxSessionPickerAction);
+    if (sessionMenu == nullptr || sessionMenu->menu() == nullptr) {
+        _tmuxSessionPickerAction->setEnabled(false);
+        return;
+    }
+
+    sessionMenu->menu()->clear();
+
+    bool hasEntries = false;
+    for (auto it = _tmuxModeBySessionId.cbegin(); it != _tmuxModeBySessionId.cend(); ++it) {
+        if (!it.value()) {
+            continue;
+        }
+
+        const int controlSessionId = it.key();
+        const TmuxControlSnapshot snapshot = _tmuxControlManager->snapshotForSession(controlSessionId);
+        for (const TmuxControlSessionState &tmuxSession : snapshot.sessions) {
+            QString label = QStringLiteral("%1 (%2)")
+                                .arg(tmuxSession.name.isEmpty() ? QString::fromUtf8(tmuxSession.id) : QString::fromUtf8(tmuxSession.name),
+                                     QString::fromUtf8(tmuxSession.id));
+            QAction *action = sessionMenu->menu()->addAction(label);
+            action->setToolTip(i18nc("@info:tooltip", "Control session %1", controlSessionId));
+            connect(action, &QAction::triggered, this, [this, controlSessionId, tmuxSession]() {
+                selectTmuxSession(controlSessionId, tmuxSession.id);
+            });
+            hasEntries = true;
+        }
+    }
+
+    _tmuxSessionPickerAction->setEnabled(hasEntries);
+}
+
 void ViewManager::handleTmuxViewFocused(SessionController *controller)
 {
-    if (controller == nullptr || controller->view() == nullptr || controller->session() == nullptr) {
+    if (_tmuxUiSyncInProgress || controller == nullptr || controller->view() == nullptr || controller->session() == nullptr) {
         return;
     }
 
     TerminalDisplay *display = controller->view();
-    if (!display->property(kTmuxManagedProperty).toBool()) {
+    const int sessionId = controller->session()->sessionId();
+    if (!display->property(kTmuxManagedProperty).toBool() || !_tmuxModeBySessionId.value(sessionId, false)) {
         return;
     }
 
@@ -982,6 +1095,7 @@ Session *ViewManager::createSession(const Profile::Ptr &profile, const QString &
         _tmuxModeBySessionId.remove(sessionId);
         _tmuxKnownWindowsBySessionId.remove(sessionId);
         rebuildTmuxWindowPicker();
+        rebuildTmuxSessionPicker();
     });
     if (!directory.isEmpty()) {
         session->setInitialWorkingDirectory(directory);

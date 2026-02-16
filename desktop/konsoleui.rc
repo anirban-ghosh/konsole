@@ -35,6 +35,7 @@
             <Action name="detach-view"/>
             <Action name="save-layout"/>
             <Action name="load-layout"/>
+            <Action name="tmux-control-session-picker"/>
             <Action name="tmux-control-window-picker"/>
             <Separator/>
             <DefineGroup name="session-view-operations"/>

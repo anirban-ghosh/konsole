@@ -485,7 +485,10 @@ private Q_SLOTS:
     void attachTmuxControlMode();
     void synchronizeTmuxUiForSession(int sessionId);
     void rebuildTmuxWindowPicker();
+    void rebuildTmuxSessionPicker();
     void selectTmuxWindow(const QByteArray &windowId);
+    void selectTmuxSession(int controlSessionId, const QByteArray &tmuxSessionId);
+    void selectTmuxWindowInControlSession(int controlSessionId, const QByteArray &windowId);
     void handleTmuxViewFocused(SessionController *controller);
 
 private:
@@ -533,6 +536,7 @@ private:
     void ensureTmuxTabForWindow(Session *session, const TmuxControlWindowState &window);
     void ensureTmuxPanesForWindow(Session *session, const TmuxControlWindowState &window);
     QList<TerminalDisplay *> tmuxDisplaysForWindow(ViewSplitter *splitter, int sessionId, const QByteArray &windowId) const;
+    void pruneTmuxUiForSession(int sessionId, const QSet<QByteArray> &knownWindows);
     static QByteArray terminalTmuxWindowId(const TerminalDisplay *display);
     static QByteArray terminalTmuxPaneId(const TerminalDisplay *display);
     static void setTerminalTmuxMetadata(TerminalDisplay *display, int sessionId, const QByteArray &windowId, const QByteArray &paneId);
@@ -561,8 +565,10 @@ private:
     std::unique_ptr<TmuxControlManager> _tmuxControlManager;
     QAction *_attachTmuxControlAction = nullptr;
     QAction *_tmuxWindowPickerAction = nullptr;
+    QAction *_tmuxSessionPickerAction = nullptr;
     QHash<int, bool> _tmuxModeBySessionId;
     QHash<int, QSet<QByteArray>> _tmuxKnownWindowsBySessionId;
+    bool _tmuxUiSyncInProgress = false;
 
     friend class ViewManagerTest;
 };
