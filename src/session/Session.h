@@ -643,6 +643,7 @@ public Q_SLOTS:
     QList<TmuxControlSessionState> tmuxControlSessions() const;
     QList<TmuxControlWindowState> tmuxControlWindows() const;
     QList<TmuxControlPaneState> tmuxControlPanes() const;
+    bool enqueueTmuxControlCommand(const QByteArray &command, TmuxControlCommandKind kind = TmuxControlCommandKind::Unknown);
 
     /** Sets the text codec used by this sessions terminal emulation.
      * Overloaded to accept a QByteArray for convenience since DBus
@@ -973,9 +974,11 @@ private:
     void updateWorkingDirectory();
     void updateContainerContext();
     void handleTmuxControlEvents(const QList<TmuxControlEvent> &events);
+    void handleTmuxOutputNotification(const TmuxControlEvent &event);
     void sendNextTmuxControlCommand();
     void processPotentialTmuxControlRequest(const QByteArray &outgoingData);
     static bool isTmuxControlInvocation(const QByteArray &commandLine);
+    static QByteArray decodeTmuxEscapedBytes(const QByteArray &escaped);
     SessionController *controller();
 
     QString validDirectory(const QString &dir) const;

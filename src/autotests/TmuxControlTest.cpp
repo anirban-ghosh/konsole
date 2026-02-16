@@ -62,6 +62,19 @@ void TmuxControlTest::parsesNotification()
     QCOMPARE(events.at(0).arguments.at(0), QByteArrayLiteral("@12"));
 }
 
+void TmuxControlTest::parsesOutputNotificationPayload()
+{
+    TmuxControlParser parser;
+    const QList<TmuxControlEvent> events = parser.feed("%output %1 hello\\040world\\012\n");
+
+    QCOMPARE(events.size(), 1);
+    QCOMPARE(events.at(0).type, TmuxControlEventType::Notification);
+    QCOMPARE(events.at(0).notificationName, QByteArrayLiteral("output"));
+    QCOMPARE(events.at(0).arguments.size(), 2);
+    QCOMPARE(events.at(0).arguments.at(0), QByteArrayLiteral("%1"));
+    QCOMPARE(events.at(0).arguments.at(1), QByteArrayLiteral("hello\\040world\\012"));
+}
+
 void TmuxControlTest::parsesSplitInputChunks()
 {
     TmuxControlParser parser;
@@ -126,6 +139,37 @@ void TmuxControlTest::buildsStateSnapshotFromListCommands()
     QCOMPARE(sessions.size(), 2);
     QCOMPARE(windows.size(), 2);
     QCOMPARE(panes.size(), 2);
+}
+
+void TmuxControlTest::updatesStateFromNotifications()
+{
+    TmuxControlStateModel stateModel;
+
+    stateModel.beginSnapshot(TmuxControlCommandKind::ListSessions);
+    stateModel.applyCommandOutput(TmuxControlCommandKind::ListSessions, QByteArrayLiteral("$1\talpha"));
+    stateModel.finalizeSnapshot(TmuxControlCommandKind::ListSessions, true);
+
+    stateModel.beginSnapshot(TmuxControlCommandKind::ListWindows);
+    stateModel.applyCommandOutput(TmuxControlCommandKind::ListWindows, QByteArrayLiteral("$1\t@10\t0\tmain"));
+    stateModel.finalizeSnapshot(TmuxControlCommandKind::ListWindows, true);
+
+    stateModel.beginSnapshot(TmuxControlCommandKind::ListPanes);
+    stateModel.applyCommandOutput(TmuxControlCommandKind::ListPanes, QByteArrayLiteral("@10\t%100\t0\t1"));
+    stateModel.applyCommandOutput(TmuxControlCommandKind::ListPanes, QByteArrayLiteral("@10\t%101\t1\t0"));
+    stateModel.finalizeSnapshot(TmuxControlCommandKind::ListPanes, true);
+
+    stateModel.applyNotification(QByteArrayLiteral("window-renamed"), {QByteArrayLiteral("@10"), QByteArrayLiteral("dev")});
+    stateModel.applyNotification(QByteArrayLiteral("pane-focus-in"), {QByteArrayLiteral("%101")});
+    stateModel.applyNotification(QByteArrayLiteral("pane-exited"), {QByteArrayLiteral("%100")});
+
+    const auto windows = stateModel.windows();
+    const auto panes = stateModel.panes();
+
+    QCOMPARE(windows.size(), 1);
+    QCOMPARE(windows.at(0).name, QByteArrayLiteral("dev"));
+    QCOMPARE(panes.size(), 1);
+    QCOMPARE(panes.at(0).id, QByteArrayLiteral("%101"));
+    QCOMPARE(panes.at(0).active, true);
 }
 
 QTEST_GUILESS_MAIN(TmuxControlTest)

@@ -19,9 +19,11 @@ private Q_SLOTS:
     void parsesCommandEnvelopeAndOutput();
     void parsesErrorEnvelope();
     void parsesNotification();
+    void parsesOutputNotificationPayload();
     void parsesSplitInputChunks();
     void queuesMonotonicCommands();
     void buildsStateSnapshotFromListCommands();
+    void updatesStateFromNotifications();
 };
 }
 

@@ -12,10 +12,12 @@
 #include <QHash>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <memory>
 
 #include "containers/ContainerInfo.h"
 #include "konsoleprivate_export.h"
+#include "tmuxcontrol/TmuxControlStateModel.h"
 // Konsole
 
 class KActionCollection;
@@ -27,7 +29,6 @@ class ColorScheme;
 class Profile;
 class Session;
 class SessionController;
-class TabbedViewContainer;
 class TabbedViewContainer;
 class TerminalDisplay;
 class ViewProperties;
@@ -481,6 +482,11 @@ private Q_SLOTS:
     void toggleSemanticHints();
 
     void toggleLineNumbers();
+    void attachTmuxControlMode();
+    void synchronizeTmuxUiForSession(int sessionId);
+    void rebuildTmuxWindowPicker();
+    void selectTmuxWindow(const QByteArray &windowId);
+    void handleTmuxViewFocused(SessionController *controller);
 
 private:
     Q_DISABLE_COPY(ViewManager)
@@ -520,6 +526,16 @@ private:
 
     void registerTerminal(TerminalDisplay *terminal);
     void unregisterTerminal(TerminalDisplay *terminal);
+    int tmuxSessionIdForUi();
+    Session *tmuxSessionById(int sessionId) const;
+    QList<TmuxControlWindowState> sortedTmuxWindowsForSession(int sessionId) const;
+    QList<TmuxControlPaneState> sortedTmuxPanesForWindow(int sessionId, const QByteArray &windowId) const;
+    void ensureTmuxTabForWindow(Session *session, const TmuxControlWindowState &window);
+    void ensureTmuxPanesForWindow(Session *session, const TmuxControlWindowState &window);
+    QList<TerminalDisplay *> tmuxDisplaysForWindow(ViewSplitter *splitter, int sessionId, const QByteArray &windowId) const;
+    static QByteArray terminalTmuxWindowId(const TerminalDisplay *display);
+    static QByteArray terminalTmuxPaneId(const TerminalDisplay *display);
+    static void setTerminalTmuxMetadata(TerminalDisplay *display, int sessionId, const QByteArray &windowId, const QByteArray &paneId);
 
 private:
     QPointer<TabbedViewContainer> _viewContainer;
@@ -543,6 +559,10 @@ private:
 
     QList<QAction *> contextMenuAdditionalActions;
     std::unique_ptr<TmuxControlManager> _tmuxControlManager;
+    QAction *_attachTmuxControlAction = nullptr;
+    QAction *_tmuxWindowPickerAction = nullptr;
+    QHash<int, bool> _tmuxModeBySessionId;
+    QHash<int, QSet<QByteArray>> _tmuxKnownWindowsBySessionId;
 
     friend class ViewManagerTest;
 };

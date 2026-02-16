@@ -1109,6 +1109,17 @@ QList<TmuxControlPaneState> Session::tmuxControlPanes() const
     return _tmuxControlStateModel.panes();
 }
 
+bool Session::enqueueTmuxControlCommand(const QByteArray &command, TmuxControlCommandKind kind)
+{
+    if (!_tmuxControlModeActive || _shellProcess == nullptr || command.trimmed().isEmpty()) {
+        return false;
+    }
+
+    _tmuxControlCommandQueue.enqueue(command.trimmed(), kind);
+    sendNextTmuxControlCommand();
+    return true;
+}
+
 // Only D-Bus calls this function (via SendText or runCommand)
 void Session::sendText(const QString &text) const
 {
@@ -1886,6 +1897,70 @@ bool Session::isTmuxControlInvocation(const QByteArray &commandLine)
     return false;
 }
 
+QByteArray Session::decodeTmuxEscapedBytes(const QByteArray &escaped)
+{
+    QByteArray decoded;
+    decoded.reserve(escaped.size());
+
+    for (int i = 0; i < escaped.size(); ++i) {
+        const char c = escaped.at(i);
+        if (c != '\\') {
+            decoded.append(c);
+            continue;
+        }
+
+        if (i + 1 >= escaped.size()) {
+            decoded.append('\\');
+            continue;
+        }
+
+        const char next = escaped.at(++i);
+        if (next >= '0' && next <= '7' && i + 2 < escaped.size()) {
+            const char second = escaped.at(i + 1);
+            const char third = escaped.at(i + 2);
+            if (second >= '0' && second <= '7' && third >= '0' && third <= '7') {
+                const int value = ((next - '0') * 64) + ((second - '0') * 8) + (third - '0');
+                decoded.append(static_cast<char>(value));
+                i += 2;
+                continue;
+            }
+        }
+
+        switch (next) {
+        case 'n':
+            decoded.append('\n');
+            break;
+        case 'r':
+            decoded.append('\r');
+            break;
+        case 't':
+            decoded.append('\t');
+            break;
+        case '\\':
+            decoded.append('\\');
+            break;
+        default:
+            decoded.append(next);
+            break;
+        }
+    }
+
+    return decoded;
+}
+
+void Session::handleTmuxOutputNotification(const TmuxControlEvent &event)
+{
+    if (_emulation == nullptr || event.arguments.size() < 2) {
+        return;
+    }
+
+    const QByteArray payload = decodeTmuxEscapedBytes(event.arguments.at(1));
+    if (payload.isEmpty()) {
+        return;
+    }
+    _emulation->receiveData(payload.constData(), payload.size());
+}
+
 void Session::handleTmuxControlEvents(const QList<TmuxControlEvent> &events)
 {
     bool sawControlProtocolEvent = false;
@@ -1930,6 +2005,15 @@ void Session::handleTmuxControlEvents(const QList<TmuxControlEvent> &events)
         }
 
         if (event.type == TmuxControlEventType::Notification) {
+            if (event.notificationName == "output" || event.notificationName == "extended-output") {
+                handleTmuxOutputNotification(event);
+            } else if (event.notificationName == "exit") {
+                _tmuxControlModeActive = false;
+                _tmuxControlDetectionArmed = false;
+                _tmuxCommandKinds.clear();
+                _tmuxControlCommandQueue = TmuxControlCommandQueue();
+                Q_EMIT tmuxControlModeChanged(false);
+            }
             _tmuxControlStateModel.applyNotification(event.notificationName, event.arguments);
             stateChanged = true;
             continue;

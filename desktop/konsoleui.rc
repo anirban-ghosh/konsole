@@ -7,6 +7,7 @@
             <Action name="new-window"/>
             <Action name="new-tab"/>
             <Action name="clone-tab"/>
+            <Action name="tmux-control-attach"/>
             <Separator/>
             <DefineGroup name="session-operations"/>
             <Separator/>
@@ -34,6 +35,7 @@
             <Action name="detach-view"/>
             <Action name="save-layout"/>
             <Action name="load-layout"/>
+            <Action name="tmux-control-window-picker"/>
             <Separator/>
             <DefineGroup name="session-view-operations"/>
         </Menu>

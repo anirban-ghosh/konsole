@@ -15,6 +15,7 @@
 #include <QFileDialog>
 #include <QStringList>
 #include <QTabBar>
+#include <QVariant>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -52,11 +53,21 @@
 #include "widgets/ViewContainer.h"
 #include "widgets/ViewSplitter.h"
 
+#include <algorithm>
+
 using namespace Konsole;
 
 int ViewManager::lastManagerId = 0;
 
 Q_DECLARE_METATYPE(QList<double>);
+
+namespace
+{
+constexpr const char kTmuxManagedProperty[] = "konsole.tmuxManaged";
+constexpr const char kTmuxSessionIdProperty[] = "konsole.tmuxSessionId";
+constexpr const char kTmuxWindowIdProperty[] = "konsole.tmuxWindowId";
+constexpr const char kTmuxPaneIdProperty[] = "konsole.tmuxPaneId";
+}
 
 ViewManager::ViewManager(QObject *parent, KActionCollection *collection)
     : QObject(parent)
@@ -89,6 +100,18 @@ ViewManager::ViewManager(QObject *parent, KActionCollection *collection)
     connect(SessionManager::instance(), &Konsole::SessionManager::sessionUpdated, this, &Konsole::ViewManager::updateViewsForSession);
 
     _managerId = ++lastManagerId;
+
+    connect(_tmuxControlManager.get(), &TmuxControlManager::sessionTmuxControlModeChanged, this, [this](int sessionId, bool enabled) {
+        _tmuxModeBySessionId.insert(sessionId, enabled);
+        if (!enabled) {
+            _tmuxKnownWindowsBySessionId.remove(sessionId);
+        }
+        rebuildTmuxWindowPicker();
+    });
+    connect(_tmuxControlManager.get(), &TmuxControlManager::sessionSnapshotChanged, this, [this](int sessionId) {
+        synchronizeTmuxUiForSession(sessionId);
+        rebuildTmuxWindowPicker();
+    });
 
 #if HAVE_DBUS
     // prepare DBus communication
@@ -206,6 +229,19 @@ void ViewManager::setupActions()
     });
     collection->addAction(QStringLiteral("load-terminals-layout-1x2"), action);
     splitViewActions->addAction(action);
+
+    _attachTmuxControlAction = new QAction(this);
+    _attachTmuxControlAction->setIcon(QIcon::fromTheme(QStringLiteral("utilities-terminal")));
+    _attachTmuxControlAction->setText(i18nc("@action:inmenu", "Attach tmux Control Mode"));
+    connect(_attachTmuxControlAction, &QAction::triggered, this, &ViewManager::attachTmuxControlMode);
+    collection->addAction(QStringLiteral("tmux-control-attach"), _attachTmuxControlAction);
+
+    auto *tmuxWindowPicker = new KActionMenu(i18nc("@action:inmenu", "tmux Windows"), collection);
+    tmuxWindowPicker->setIcon(QIcon::fromTheme(QStringLiteral("view-list-tree")));
+    tmuxWindowPicker->menu()->setToolTipsVisible(true);
+    connect(tmuxWindowPicker->menu(), &QMenu::aboutToShow, this, &ViewManager::rebuildTmuxWindowPicker);
+    _tmuxWindowPickerAction = collection->addAction(QStringLiteral("tmux-control-window-picker"), tmuxWindowPicker);
+    _tmuxWindowPickerAction->setEnabled(false);
 
     action = new QAction(this);
     action->setText(i18nc("@action:inmenu", "Expand View"));
@@ -621,6 +657,288 @@ void ViewManager::toggleLineNumbers()
     activeTerminalDisplay->update();
 }
 
+void ViewManager::attachTmuxControlMode()
+{
+    const int sessionId = currentSession();
+    if (sessionId < 0) {
+        return;
+    }
+
+    Session *session = SessionManager::instance()->idToSession(sessionId);
+    if (session == nullptr || !session->isRunning()) {
+        return;
+    }
+
+    session->runCommand(QStringLiteral("tmux -CC"));
+}
+
+int ViewManager::tmuxSessionIdForUi()
+{
+    const int activeSessionId = currentSession();
+    if (activeSessionId >= 0 && _tmuxModeBySessionId.value(activeSessionId, false)) {
+        return activeSessionId;
+    }
+
+    for (auto it = _tmuxModeBySessionId.cbegin(); it != _tmuxModeBySessionId.cend(); ++it) {
+        if (it.value()) {
+            return it.key();
+        }
+    }
+
+    return -1;
+}
+
+Session *ViewManager::tmuxSessionById(int sessionId) const
+{
+    if (sessionId < 0) {
+        return nullptr;
+    }
+    return SessionManager::instance()->idToSession(sessionId);
+}
+
+QList<TmuxControlWindowState> ViewManager::sortedTmuxWindowsForSession(int sessionId) const
+{
+    const TmuxControlSnapshot snapshot = _tmuxControlManager->snapshotForSession(sessionId);
+    QList<TmuxControlWindowState> windows = snapshot.windows;
+    std::sort(windows.begin(), windows.end(), [](const TmuxControlWindowState &left, const TmuxControlWindowState &right) {
+        if (left.sessionId != right.sessionId) {
+            return left.sessionId < right.sessionId;
+        }
+        if (left.index != right.index) {
+            return left.index < right.index;
+        }
+        return left.id < right.id;
+    });
+    return windows;
+}
+
+QList<TmuxControlPaneState> ViewManager::sortedTmuxPanesForWindow(int sessionId, const QByteArray &windowId) const
+{
+    const TmuxControlSnapshot snapshot = _tmuxControlManager->snapshotForSession(sessionId);
+    QList<TmuxControlPaneState> panes;
+    for (const TmuxControlPaneState &pane : snapshot.panes) {
+        if (pane.windowId == windowId) {
+            panes.append(pane);
+        }
+    }
+    std::sort(panes.begin(), panes.end(), [](const TmuxControlPaneState &left, const TmuxControlPaneState &right) {
+        if (left.index != right.index) {
+            return left.index < right.index;
+        }
+        return left.id < right.id;
+    });
+    return panes;
+}
+
+QByteArray ViewManager::terminalTmuxWindowId(const TerminalDisplay *display)
+{
+    return display == nullptr ? QByteArray() : display->property(kTmuxWindowIdProperty).toByteArray();
+}
+
+QByteArray ViewManager::terminalTmuxPaneId(const TerminalDisplay *display)
+{
+    return display == nullptr ? QByteArray() : display->property(kTmuxPaneIdProperty).toByteArray();
+}
+
+void ViewManager::setTerminalTmuxMetadata(TerminalDisplay *display, int sessionId, const QByteArray &windowId, const QByteArray &paneId)
+{
+    if (display == nullptr) {
+        return;
+    }
+
+    display->setProperty(kTmuxManagedProperty, true);
+    display->setProperty(kTmuxSessionIdProperty, sessionId);
+    display->setProperty(kTmuxWindowIdProperty, windowId);
+    display->setProperty(kTmuxPaneIdProperty, paneId);
+}
+
+QList<TerminalDisplay *> ViewManager::tmuxDisplaysForWindow(ViewSplitter *splitter, int sessionId, const QByteArray &windowId) const
+{
+    QList<TerminalDisplay *> displays;
+    if (splitter == nullptr) {
+        return displays;
+    }
+
+    const QList<TerminalDisplay *> terminals = splitter->findChildren<TerminalDisplay *>();
+    for (TerminalDisplay *terminal : terminals) {
+        if (terminal->property(kTmuxManagedProperty).toBool() && terminal->property(kTmuxSessionIdProperty).toInt() == sessionId
+            && terminalTmuxWindowId(terminal) == windowId) {
+            displays.append(terminal);
+        }
+    }
+    return displays;
+}
+
+void ViewManager::ensureTmuxTabForWindow(Session *session, const TmuxControlWindowState &window)
+{
+    if (_viewContainer.isNull() || session == nullptr) {
+        return;
+    }
+
+    for (int i = 0; i < _viewContainer->count(); ++i) {
+        auto *splitter = _viewContainer->viewSplitterAt(i);
+        const QList<TerminalDisplay *> displays = tmuxDisplaysForWindow(splitter, session->sessionId(), window.id);
+        if (!displays.isEmpty()) {
+            return;
+        }
+    }
+
+    TerminalDisplay *display = createView(session);
+    setTerminalTmuxMetadata(display, session->sessionId(), window.id, QByteArray());
+    _viewContainer->addView(display);
+    if (!window.name.isEmpty()) {
+        _viewContainer->setTabText(_viewContainer->currentIndex(), QString::fromUtf8(window.name));
+    }
+}
+
+void ViewManager::ensureTmuxPanesForWindow(Session *session, const TmuxControlWindowState &window)
+{
+    if (_viewContainer.isNull() || session == nullptr) {
+        return;
+    }
+
+    const QList<TmuxControlPaneState> panes = sortedTmuxPanesForWindow(session->sessionId(), window.id);
+    if (panes.isEmpty()) {
+        return;
+    }
+
+    ViewSplitter *targetSplitter = nullptr;
+    int targetTabIndex = -1;
+    for (int i = 0; i < _viewContainer->count(); ++i) {
+        auto *splitter = _viewContainer->viewSplitterAt(i);
+        if (!tmuxDisplaysForWindow(splitter, session->sessionId(), window.id).isEmpty()) {
+            targetSplitter = splitter;
+            targetTabIndex = i;
+            break;
+        }
+    }
+
+    if (targetSplitter == nullptr) {
+        return;
+    }
+
+    const int previousTab = _viewContainer->currentIndex();
+    _viewContainer->setCurrentIndex(targetTabIndex);
+
+    QList<TerminalDisplay *> displays = tmuxDisplaysForWindow(targetSplitter, session->sessionId(), window.id);
+    while (displays.size() < panes.size()) {
+        if (!displays.isEmpty()) {
+            displays.first()->setFocus(Qt::OtherFocusReason);
+        }
+
+        TerminalDisplay *newDisplay = createView(session);
+        setTerminalTmuxMetadata(newDisplay, session->sessionId(), window.id, QByteArray());
+        _viewContainer->splitView(newDisplay, displays.size() % 2 == 0 ? Qt::Horizontal : Qt::Vertical);
+        displays = tmuxDisplaysForWindow(targetSplitter, session->sessionId(), window.id);
+    }
+
+    const int assignCount = qMin(displays.size(), panes.size());
+    for (int i = 0; i < assignCount; ++i) {
+        setTerminalTmuxMetadata(displays.at(i), session->sessionId(), window.id, panes.at(i).id);
+        if (panes.at(i).active) {
+            displays.at(i)->setFocus(Qt::OtherFocusReason);
+        }
+    }
+
+    if (previousTab >= 0 && previousTab < _viewContainer->count()) {
+        _viewContainer->setCurrentIndex(previousTab);
+    }
+}
+
+void ViewManager::synchronizeTmuxUiForSession(int sessionId)
+{
+    if (!_tmuxModeBySessionId.value(sessionId, false)) {
+        return;
+    }
+
+    Session *session = tmuxSessionById(sessionId);
+    if (session == nullptr || _viewContainer.isNull()) {
+        return;
+    }
+
+    const QList<TmuxControlWindowState> windows = sortedTmuxWindowsForSession(sessionId);
+    if (windows.isEmpty()) {
+        return;
+    }
+
+    QSet<QByteArray> knownWindows;
+    for (const TmuxControlWindowState &window : windows) {
+        knownWindows.insert(window.id);
+        ensureTmuxTabForWindow(session, window);
+        ensureTmuxPanesForWindow(session, window);
+    }
+    _tmuxKnownWindowsBySessionId.insert(sessionId, knownWindows);
+}
+
+void ViewManager::selectTmuxWindow(const QByteArray &windowId)
+{
+    const int sessionId = tmuxSessionIdForUi();
+    Session *session = tmuxSessionById(sessionId);
+    if (session == nullptr || windowId.isEmpty()) {
+        return;
+    }
+
+    session->enqueueTmuxControlCommand(QByteArrayLiteral("select-window -t ") + windowId);
+
+    for (int i = 0; i < _viewContainer->count(); ++i) {
+        auto *splitter = _viewContainer->viewSplitterAt(i);
+        if (!tmuxDisplaysForWindow(splitter, sessionId, windowId).isEmpty()) {
+            _viewContainer->setCurrentIndex(i);
+            break;
+        }
+    }
+}
+
+void ViewManager::rebuildTmuxWindowPicker()
+{
+    if (_tmuxWindowPickerAction == nullptr) {
+        return;
+    }
+
+    auto *windowMenu = qobject_cast<KActionMenu *>(_tmuxWindowPickerAction);
+    if (windowMenu == nullptr || windowMenu->menu() == nullptr) {
+        _tmuxWindowPickerAction->setEnabled(false);
+        return;
+    }
+
+    windowMenu->menu()->clear();
+
+    const int sessionId = tmuxSessionIdForUi();
+    const QList<TmuxControlWindowState> windows = sortedTmuxWindowsForSession(sessionId);
+    for (const TmuxControlWindowState &window : windows) {
+        QString text = QStringLiteral("%1: %2")
+                           .arg(window.index >= 0 ? QString::number(window.index) : QString::fromUtf8(window.id),
+                                window.name.isEmpty() ? QString::fromUtf8(window.id) : QString::fromUtf8(window.name));
+        QAction *action = windowMenu->menu()->addAction(text);
+        action->setData(window.id);
+        action->setToolTip(QString::fromUtf8(window.id));
+        connect(action, &QAction::triggered, this, [this, action]() {
+            selectTmuxWindow(action->data().toByteArray());
+        });
+    }
+
+    _tmuxWindowPickerAction->setEnabled(!windows.isEmpty());
+}
+
+void ViewManager::handleTmuxViewFocused(SessionController *controller)
+{
+    if (controller == nullptr || controller->view() == nullptr || controller->session() == nullptr) {
+        return;
+    }
+
+    TerminalDisplay *display = controller->view();
+    if (!display->property(kTmuxManagedProperty).toBool()) {
+        return;
+    }
+
+    const QByteArray paneId = terminalTmuxPaneId(display);
+    if (paneId.isEmpty()) {
+        return;
+    }
+
+    controller->session()->enqueueTmuxControlCommand(QByteArrayLiteral("select-pane -t ") + paneId);
+}
+
 QHash<TerminalDisplay *, Session *> ViewManager::forgetAll(ViewSplitter *splitter)
 {
     splitter->setParent(nullptr);
@@ -658,6 +976,12 @@ Session *ViewManager::createSession(const Profile::Ptr &profile, const QString &
     Session *session = SessionManager::instance()->createSession(profile);
     Q_ASSERT(session);
     _tmuxControlManager->watchSession(session);
+    connect(session, &Session::finished, this, [this](Session *finishedSession) {
+        const int sessionId = finishedSession->sessionId();
+        _tmuxModeBySessionId.remove(sessionId);
+        _tmuxKnownWindowsBySessionId.remove(sessionId);
+        rebuildTmuxWindowPicker();
+    });
     if (!directory.isEmpty()) {
         session->setInitialWorkingDirectory(directory);
     }
@@ -900,6 +1224,7 @@ SessionController *ViewManager::createController(Session *session, TerminalDispl
     connect(session, &Konsole::Session::selectionChanged, controller, &Konsole::SessionController::selectionChanged);
     connect(view, &Konsole::TerminalDisplay::destroyed, controller, &Konsole::SessionController::deleteLater);
     connect(controller, &Konsole::SessionController::viewDragAndDropped, this, &Konsole::ViewManager::forgetController);
+    connect(controller, &Konsole::SessionController::viewFocused, this, &Konsole::ViewManager::handleTmuxViewFocused);
     connect(controller, &Konsole::SessionController::requestSplitViewLeftRight, this, &Konsole::ViewManager::splitLeftRight);
     connect(controller, &Konsole::SessionController::requestSplitViewTopBottom, this, &Konsole::ViewManager::splitTopBottom);
     connect(this, &Konsole::ViewManager::contextMenuAdditionalActionsChanged, controller, &Konsole::SessionController::setContextMenuAdditionalActions);

@@ -85,7 +85,14 @@ TmuxControlEvent TmuxControlParser::parseNotification(const QByteArray &line)
 
     event.notificationName = line.mid(1, firstSpace - 1);
     const QByteArray rest = line.mid(firstSpace + 1);
-    if (!rest.isEmpty()) {
+    if (!rest.isEmpty() && (event.notificationName == "output" || event.notificationName == "extended-output")) {
+        const int payloadStart = rest.indexOf(' ');
+        if (payloadStart < 0) {
+            event.arguments = {rest};
+        } else {
+            event.arguments = {rest.left(payloadStart), rest.mid(payloadStart + 1)};
+        }
+    } else if (!rest.isEmpty()) {
         event.arguments = rest.split(' ');
     }
     return event;

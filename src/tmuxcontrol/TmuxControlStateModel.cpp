@@ -106,12 +106,22 @@ void TmuxControlStateModel::finalizeSnapshot(TmuxControlCommandKind kind, bool s
 
 void TmuxControlStateModel::applyNotification(const QByteArray &name, const QList<QByteArray> &arguments)
 {
-    if ((name == "session-closed" || name == "session-renamed") && !arguments.isEmpty()) {
+    if (name == "session-closed" && !arguments.isEmpty()) {
         _sessions.remove(arguments.first());
         return;
     }
 
-    if ((name == "window-close" || name == "window-renamed") && !arguments.isEmpty()) {
+    if (name == "session-renamed" && arguments.size() >= 2) {
+        TmuxControlSessionState session = _sessions.value(arguments.at(0));
+        session.id = arguments.at(0);
+        session.name = arguments.at(1);
+        if (!session.id.isEmpty()) {
+            _sessions.insert(session.id, session);
+        }
+        return;
+    }
+
+    if (name == "window-close" && !arguments.isEmpty()) {
         const QByteArray windowId = arguments.first();
         _windows.remove(windowId);
         for (auto it = _panes.begin(); it != _panes.end();) {
@@ -124,8 +134,41 @@ void TmuxControlStateModel::applyNotification(const QByteArray &name, const QLis
         return;
     }
 
+    if (name == "window-renamed" && arguments.size() >= 2) {
+        TmuxControlWindowState window = _windows.value(arguments.at(0));
+        window.id = arguments.at(0);
+        window.name = arguments.at(1);
+        if (!window.id.isEmpty()) {
+            _windows.insert(window.id, window);
+        }
+        return;
+    }
+
+    if ((name == "window-add" || name == "window-linked") && !arguments.isEmpty()) {
+        TmuxControlWindowState window = _windows.value(arguments.at(0));
+        window.id = arguments.at(0);
+        _windows.insert(window.id, window);
+        return;
+    }
+
+    if (name == "pane-add" && arguments.size() >= 2) {
+        TmuxControlPaneState pane = _panes.value(arguments.at(1));
+        pane.windowId = arguments.at(0);
+        pane.id = arguments.at(1);
+        _panes.insert(pane.id, pane);
+        return;
+    }
+
     if ((name == "pane-died" || name == "pane-exited") && !arguments.isEmpty()) {
         _panes.remove(arguments.first());
+        return;
+    }
+
+    if (name == "pane-focus-in" && !arguments.isEmpty()) {
+        const QByteArray focusedPaneId = arguments.first();
+        for (auto it = _panes.begin(); it != _panes.end(); ++it) {
+            it->active = (it.key() == focusedPaneId);
+        }
     }
 }
 
