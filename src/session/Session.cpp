@@ -11,6 +11,7 @@
 #include "Session.h"
 
 // Standard
+#include <algorithm>
 #include <csignal>
 #include <cstdlib>
 
@@ -182,7 +183,7 @@ void Session::openTeletype(int fd, bool runShell)
 
     // connect the I/O between emulator and pty process
     connect(_shellProcess, &Konsole::Pty::receivedData, this, &Konsole::Session::onReceiveBlock);
-    connect(_emulation, &Konsole::Emulation::sendData, _shellProcess, &Konsole::Pty::sendData);
+    connect(_emulation, &Konsole::Emulation::sendData, this, &Konsole::Session::onSendDataFromEmulation);
 
     // UTF8 mode
     connect(_emulation, &Konsole::Emulation::useUtf8Request, _shellProcess, &Konsole::Pty::setUtf8Mode);
@@ -1088,6 +1089,11 @@ void Session::sendTextToTerminal(const QString &text, const QChar &eol) const
     }
 }
 
+bool Session::isTmuxControlModeActive() const
+{
+    return _tmuxControlModeActive;
+}
+
 // Only D-Bus calls this function (via SendText or runCommand)
 void Session::sendText(const QString &text) const
 {
@@ -1777,7 +1783,150 @@ void Session::zmodemFinished()
 void Session::onReceiveBlock(const char *buf, int len)
 {
     handleActivity();
+
+    if (_tmuxControlModeActive || _tmuxControlDetectionArmed) {
+        const QList<TmuxControlEvent> events = _tmuxControlParser.feed(QByteArray(buf, len));
+        if (!events.isEmpty()) {
+            handleTmuxControlEvents(events);
+        }
+
+        if (_tmuxControlModeActive) {
+            return;
+        }
+    }
+
     _emulation->receiveData(buf, len);
+}
+
+void Session::onSendDataFromEmulation(const QByteArray &data)
+{
+    if (_shellProcess == nullptr) {
+        return;
+    }
+
+    processPotentialTmuxControlRequest(data);
+    _shellProcess->sendData(data);
+}
+
+void Session::processPotentialTmuxControlRequest(const QByteArray &outgoingData)
+{
+    if (_tmuxControlModeActive) {
+        return;
+    }
+
+    for (const char c : outgoingData) {
+        if (c == '\n' || c == '\r') {
+            if (isTmuxControlInvocation(_interactiveCommandBuffer.trimmed())) {
+                _tmuxControlDetectionArmed = true;
+                _tmuxControlParser = TmuxControlParser();
+                _tmuxControlCommandQueue = TmuxControlCommandQueue();
+                qCDebug(KonsoleDebug) << "Detected tmux control mode invocation in session" << _sessionId;
+            }
+            _interactiveCommandBuffer.clear();
+            continue;
+        }
+
+        if (c == '\b' || c == 0x7F) {
+            if (!_interactiveCommandBuffer.isEmpty()) {
+                _interactiveCommandBuffer.chop(1);
+            }
+            continue;
+        }
+
+        if (c == 0x03 || c == 0x1B) {
+            _interactiveCommandBuffer.clear();
+            continue;
+        }
+
+        if (c >= 0x20 && c <= 0x7E && _interactiveCommandBuffer.size() < 512) {
+            _interactiveCommandBuffer.append(c);
+        }
+    }
+}
+
+bool Session::isTmuxControlInvocation(const QByteArray &commandLine)
+{
+    if (commandLine.isEmpty()) {
+        return false;
+    }
+
+    QList<QByteArray> parts = commandLine.split(' ');
+    parts.erase(std::remove_if(parts.begin(), parts.end(), [](const QByteArray &part) {
+                    return part.isEmpty();
+                }),
+                parts.end());
+
+    if (parts.isEmpty() || parts.first() != "tmux") {
+        return false;
+    }
+
+    for (const QByteArray &part : parts) {
+        if (part == "-CC") {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void Session::handleTmuxControlEvents(const QList<TmuxControlEvent> &events)
+{
+    bool sawControlProtocolEvent = false;
+    for (const TmuxControlEvent &event : events) {
+        switch (event.type) {
+        case TmuxControlEventType::CommandBegin:
+        case TmuxControlEventType::CommandOutput:
+        case TmuxControlEventType::CommandEnd:
+        case TmuxControlEventType::CommandError:
+        case TmuxControlEventType::Notification:
+            sawControlProtocolEvent = true;
+            break;
+        case TmuxControlEventType::ParseError:
+            break;
+        }
+    }
+
+    if (_tmuxControlDetectionArmed && sawControlProtocolEvent && !_tmuxControlModeActive) {
+        _tmuxControlModeActive = true;
+        _tmuxControlDetectionArmed = false;
+        qCDebug(KonsoleDebug) << "Activated tmux control mode in session" << _sessionId;
+        Q_EMIT tmuxControlModeChanged(true);
+
+        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("refresh-client -f no-output"));
+        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("list-sessions -F \"#{session_id} #{session_name}\""));
+        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("list-windows -a -F \"#{session_id} #{window_id} #{window_index} #{window_name}\""));
+        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("list-panes -a -F \"#{window_id} #{pane_id} #{pane_index} #{pane_active}\""));
+        sendNextTmuxControlCommand();
+    }
+
+    if (!_tmuxControlModeActive) {
+        return;
+    }
+
+    for (const TmuxControlEvent &event : events) {
+        if (event.type == TmuxControlEventType::ParseError) {
+            qCDebug(KonsoleDebug) << "tmux control parse error:" << event.payload;
+            continue;
+        }
+
+        if (event.type == TmuxControlEventType::CommandEnd || event.type == TmuxControlEventType::CommandError) {
+            const quint64 commandNumber = event.envelope.commandNumber;
+            if (_tmuxControlCommandQueue.markReplyReceived(commandNumber)) {
+                sendNextTmuxControlCommand();
+            }
+        }
+    }
+}
+
+void Session::sendNextTmuxControlCommand()
+{
+    if (_shellProcess == nullptr || !_tmuxControlCommandQueue.hasQueuedCommands()) {
+        return;
+    }
+
+    const TmuxControlPendingCommand pending = _tmuxControlCommandQueue.takeNextQueuedCommand();
+    _shellProcess->sendData(pending.wireCommand);
+    qCDebug(KonsoleDebug) << "Sent tmux control command #" << pending.commandNumber << pending.wireCommand.trimmed();
 }
 
 QSize Session::size()

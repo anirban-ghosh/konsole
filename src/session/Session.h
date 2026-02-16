@@ -30,6 +30,8 @@
 #include "config-konsole.h"
 #include "containers/ContainerInfo.h"
 #include "konsoleprivate_export.h"
+#include "tmuxcontrol/TmuxControlCommandQueue.h"
+#include "tmuxcontrol/TmuxControlParser.h"
 
 class QColor;
 class QTextCodec;
@@ -636,6 +638,7 @@ public Q_SLOTS:
      * a container (Toolbox, Distrobox, etc.)
      */
     bool isInContainer() const;
+    bool isTmuxControlModeActive() const;
 
     /** Sets the text codec used by this sessions terminal emulation.
      * Overloaded to accept a QByteArray for convenience since DBus
@@ -910,6 +913,7 @@ Q_SIGNALS:
      * this is emitted.
      */
     void hostnameChanged(const QString &hostname);
+    void tmuxControlModeChanged(bool enabled);
 
 private Q_SLOTS:
     void done(int, QProcess::ExitStatus);
@@ -918,6 +922,7 @@ private Q_SLOTS:
     void fireZModemUploadDetected();
 
     void onReceiveBlock(const char *buf, int len);
+    void onSendDataFromEmulation(const QByteArray &data);
     void silenceTimerDone();
     void activityTimerDone();
     void resetNotifications();
@@ -962,6 +967,10 @@ private:
     bool updateForegroundProcessInfo();
     void updateWorkingDirectory();
     void updateContainerContext();
+    void handleTmuxControlEvents(const QList<TmuxControlEvent> &events);
+    void sendNextTmuxControlCommand();
+    void processPotentialTmuxControlRequest(const QByteArray &outgoingData);
+    static bool isTmuxControlInvocation(const QByteArray &commandLine);
     SessionController *controller();
 
     QString validDirectory(const QString &dir) const;
@@ -1043,6 +1052,12 @@ private:
     QString _currentHostName = QString();
 
     bool _selectMode = false;
+
+    bool _tmuxControlDetectionArmed = false;
+    bool _tmuxControlModeActive = false;
+    QByteArray _interactiveCommandBuffer;
+    TmuxControlParser _tmuxControlParser;
+    TmuxControlCommandQueue _tmuxControlCommandQueue;
 
     /**
      * secret cookie for activationToken, shall be only exposed to shell
