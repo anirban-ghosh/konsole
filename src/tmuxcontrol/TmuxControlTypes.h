@@ -25,6 +25,14 @@ enum class TmuxControlEventType {
     ParseError,
 };
 
+enum class TmuxControlCommandKind {
+    Unknown,
+    RefreshClient,
+    ListSessions,
+    ListWindows,
+    ListPanes,
+};
+
 struct KONSOLEPRIVATE_EXPORT TmuxControlEnvelope {
     qint64 epochSeconds = 0;
     quint64 commandNumber = 0;

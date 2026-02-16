@@ -32,6 +32,7 @@
 #include "konsoleprivate_export.h"
 #include "tmuxcontrol/TmuxControlCommandQueue.h"
 #include "tmuxcontrol/TmuxControlParser.h"
+#include "tmuxcontrol/TmuxControlStateModel.h"
 
 class QColor;
 class QTextCodec;
@@ -1058,6 +1059,8 @@ private:
     QByteArray _interactiveCommandBuffer;
     TmuxControlParser _tmuxControlParser;
     TmuxControlCommandQueue _tmuxControlCommandQueue;
+    TmuxControlStateModel _tmuxControlStateModel;
+    QHash<quint64, TmuxControlCommandKind> _tmuxCommandKinds;
 
     /**
      * secret cookie for activationToken, shall be only exposed to shell

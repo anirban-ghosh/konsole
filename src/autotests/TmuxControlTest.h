@@ -21,6 +21,7 @@ private Q_SLOTS:
     void parsesNotification();
     void parsesSplitInputChunks();
     void queuesMonotonicCommands();
+    void buildsStateSnapshotFromListCommands();
 };
 }
 

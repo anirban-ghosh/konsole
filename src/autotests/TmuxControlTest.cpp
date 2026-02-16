@@ -13,6 +13,7 @@
 // Konsole
 #include "../tmuxcontrol/TmuxControlCommandQueue.h"
 #include "../tmuxcontrol/TmuxControlParser.h"
+#include "../tmuxcontrol/TmuxControlStateModel.h"
 
 using namespace Konsole;
 
@@ -97,6 +98,34 @@ void TmuxControlTest::queuesMonotonicCommands()
     QVERIFY(queue.markReplyReceived(1ULL));
     QCOMPARE(queue.isAwaitingReply(1ULL), false);
     QVERIFY(queue.isAwaitingReply(2ULL));
+}
+
+void TmuxControlTest::buildsStateSnapshotFromListCommands()
+{
+    TmuxControlStateModel stateModel;
+
+    stateModel.beginSnapshot(TmuxControlCommandKind::ListSessions);
+    stateModel.applyCommandOutput(TmuxControlCommandKind::ListSessions, QByteArrayLiteral("$1\talpha"));
+    stateModel.applyCommandOutput(TmuxControlCommandKind::ListSessions, QByteArrayLiteral("$2\tbeta"));
+    stateModel.finalizeSnapshot(TmuxControlCommandKind::ListSessions, true);
+
+    stateModel.beginSnapshot(TmuxControlCommandKind::ListWindows);
+    stateModel.applyCommandOutput(TmuxControlCommandKind::ListWindows, QByteArrayLiteral("$1\t@10\t0\tmain"));
+    stateModel.applyCommandOutput(TmuxControlCommandKind::ListWindows, QByteArrayLiteral("$2\t@11\t1\tops board"));
+    stateModel.finalizeSnapshot(TmuxControlCommandKind::ListWindows, true);
+
+    stateModel.beginSnapshot(TmuxControlCommandKind::ListPanes);
+    stateModel.applyCommandOutput(TmuxControlCommandKind::ListPanes, QByteArrayLiteral("@10\t%100\t0\t1"));
+    stateModel.applyCommandOutput(TmuxControlCommandKind::ListPanes, QByteArrayLiteral("@11\t%101\t1\t0"));
+    stateModel.finalizeSnapshot(TmuxControlCommandKind::ListPanes, true);
+
+    const auto sessions = stateModel.sessions();
+    const auto windows = stateModel.windows();
+    const auto panes = stateModel.panes();
+
+    QCOMPARE(sessions.size(), 2);
+    QCOMPARE(windows.size(), 2);
+    QCOMPARE(panes.size(), 2);
 }
 
 QTEST_GUILESS_MAIN(TmuxControlTest)

@@ -13,6 +13,7 @@
 #include <QQueue>
 #include <QSet>
 
+#include "TmuxControlTypes.h"
 #include "konsoleprivate_export.h"
 
 namespace Konsole
@@ -20,12 +21,13 @@ namespace Konsole
 struct KONSOLEPRIVATE_EXPORT TmuxControlPendingCommand {
     quint64 commandNumber = 0;
     QByteArray wireCommand;
+    TmuxControlCommandKind kind = TmuxControlCommandKind::Unknown;
 };
 
 class KONSOLEPRIVATE_EXPORT TmuxControlCommandQueue
 {
 public:
-    TmuxControlPendingCommand enqueue(const QByteArray &command);
+    TmuxControlPendingCommand enqueue(const QByteArray &command, TmuxControlCommandKind kind = TmuxControlCommandKind::Unknown);
     bool hasQueuedCommands() const;
     TmuxControlPendingCommand takeNextQueuedCommand();
 

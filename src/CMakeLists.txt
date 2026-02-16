@@ -254,6 +254,7 @@ set(konsoleprivate_SRCS ${windowadaptors_SRCS}
 
                         tmuxcontrol/TmuxControlCommandQueue.cpp
                         tmuxcontrol/TmuxControlParser.cpp
+                        tmuxcontrol/TmuxControlStateModel.cpp
 
                         widgets/TerminalDisplayAccessible.cpp
                         widgets/TerminalHeaderBar.cpp

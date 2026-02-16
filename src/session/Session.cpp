@@ -1820,6 +1820,8 @@ void Session::processPotentialTmuxControlRequest(const QByteArray &outgoingData)
                 _tmuxControlDetectionArmed = true;
                 _tmuxControlParser = TmuxControlParser();
                 _tmuxControlCommandQueue = TmuxControlCommandQueue();
+                _tmuxControlStateModel.reset();
+                _tmuxCommandKinds.clear();
                 qCDebug(KonsoleDebug) << "Detected tmux control mode invocation in session" << _sessionId;
             }
             _interactiveCommandBuffer.clear();
@@ -1892,10 +1894,12 @@ void Session::handleTmuxControlEvents(const QList<TmuxControlEvent> &events)
         qCDebug(KonsoleDebug) << "Activated tmux control mode in session" << _sessionId;
         Q_EMIT tmuxControlModeChanged(true);
 
-        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("refresh-client -f no-output"));
-        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("list-sessions -F \"#{session_id} #{session_name}\""));
-        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("list-windows -a -F \"#{session_id} #{window_id} #{window_index} #{window_name}\""));
-        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("list-panes -a -F \"#{window_id} #{pane_id} #{pane_index} #{pane_active}\""));
+        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("refresh-client -f no-output"), TmuxControlCommandKind::RefreshClient);
+        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("list-sessions -F \"#{session_id}\t#{session_name}\""), TmuxControlCommandKind::ListSessions);
+        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("list-windows -a -F \"#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\""),
+                                         TmuxControlCommandKind::ListWindows);
+        _tmuxControlCommandQueue.enqueue(QByteArrayLiteral("list-panes -a -F \"#{window_id}\t#{pane_id}\t#{pane_index}\t#{pane_active}\""),
+                                         TmuxControlCommandKind::ListPanes);
         sendNextTmuxControlCommand();
     }
 
@@ -1909,8 +1913,27 @@ void Session::handleTmuxControlEvents(const QList<TmuxControlEvent> &events)
             continue;
         }
 
+        if (event.type == TmuxControlEventType::Notification) {
+            _tmuxControlStateModel.applyNotification(event.notificationName, event.arguments);
+            continue;
+        }
+
+        const TmuxControlCommandKind kind = _tmuxCommandKinds.value(event.envelope.commandNumber, TmuxControlCommandKind::Unknown);
+        if (event.type == TmuxControlEventType::CommandBegin) {
+            _tmuxControlStateModel.beginSnapshot(kind);
+            continue;
+        }
+
+        if (event.type == TmuxControlEventType::CommandOutput) {
+            _tmuxControlStateModel.applyCommandOutput(kind, event.payload);
+            continue;
+        }
+
         if (event.type == TmuxControlEventType::CommandEnd || event.type == TmuxControlEventType::CommandError) {
             const quint64 commandNumber = event.envelope.commandNumber;
+            const bool success = event.type == TmuxControlEventType::CommandEnd;
+            _tmuxControlStateModel.finalizeSnapshot(kind, success);
+            _tmuxCommandKinds.remove(commandNumber);
             if (_tmuxControlCommandQueue.markReplyReceived(commandNumber)) {
                 sendNextTmuxControlCommand();
             }
@@ -1925,6 +1948,7 @@ void Session::sendNextTmuxControlCommand()
     }
 
     const TmuxControlPendingCommand pending = _tmuxControlCommandQueue.takeNextQueuedCommand();
+    _tmuxCommandKinds.insert(pending.commandNumber, pending.kind);
     _shellProcess->sendData(pending.wireCommand);
     qCDebug(KonsoleDebug) << "Sent tmux control command #" << pending.commandNumber << pending.wireCommand.trimmed();
 }

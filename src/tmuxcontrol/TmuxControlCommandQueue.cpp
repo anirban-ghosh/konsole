@@ -11,11 +11,12 @@
 
 using namespace Konsole;
 
-TmuxControlPendingCommand TmuxControlCommandQueue::enqueue(const QByteArray &command)
+TmuxControlPendingCommand TmuxControlCommandQueue::enqueue(const QByteArray &command, TmuxControlCommandKind kind)
 {
     TmuxControlPendingCommand pendingCommand;
     pendingCommand.commandNumber = _nextCommandNumber++;
     pendingCommand.wireCommand = normalizeCommand(command);
+    pendingCommand.kind = kind;
 
     _queuedCommands.enqueue(pendingCommand);
     _awaitingReplies.insert(pendingCommand.commandNumber);
